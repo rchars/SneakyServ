@@ -1,0 +1,2 @@
+import sneakyserv
+sneakyserv.main()
