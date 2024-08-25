@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait, FIRST_COMPLETED
 import threading
 import argparse
 import socket
@@ -14,14 +14,16 @@ class HandleClients(threading.Thread):
         self._args = args
 
     def _handle_client(self, local_sock, remote_sock):
-        t_1 = threading.Thread(target=self._send_and_recv, args=(local_sock, remote_sock,))
-        t_2 = threading.Thread(target=self._send_and_recv, args=(remote_sock, local_sock,))
-        t_1.start()
-        t_2.start()
-        t_1.join()
+        executor = ThreadPoolExecutor(max_workers=2)
+        futures = (
+            executor.submit(self._send_and_recv, local_sock, remote_sock),
+            executor.submit(self._send_and_recv, remote_sock, local_sock)
+        )
+        wait(futures, return_when=FIRST_COMPLETED)
+        executor.shutdown(wait=False)
 
     def _send_and_recv(self, send_sock, recv_sock):
-        while (data := recv_sock.recv(1024)) and data != b'': send_sock.send(data)
+        while (data := recv_sock.recv(self._args.buff_size)) and data != b'': send_sock.send(data)
 
     def close_all_socks(self):
         for sock in (self._remote_client_sock, self._local_client_sock):
@@ -33,6 +35,8 @@ class HandleClients(threading.Thread):
         try: self._setup_conns_hook(self)
         finally: self.close_all_socks()
 
+# TODO:
+    #  Use concurrent package instead of threading module
 def _recv_mode(inst):
     inst._remote_client_sock = inst._sock
     is_authed = threading.Event()
@@ -89,6 +93,8 @@ def main():
     parser.add_argument('--rport', '--rp', type=int, default=9999, help='The port of the remote server.')
     parser.add_argument('--lport', '--lp', type=int, default=9999, help='The port to listen on.')
 
+    parser.add_argument('--buff-size', dest='buff_size', type=int, default=2048, help='The buffer size for recv/send.')
+
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--recv', action='store_true', help='Receive mode: wait for connections, and if the password is correct, forward everything to the server.')
     mode.add_argument('--send', action='store_true', help='Send mode: send the password first, then forward all data from a specific network program to the server.')
@@ -117,12 +123,13 @@ def main():
                 client_handler = HandleClients(args, sock, hook)
                 client_handlers.append(client_handler)
                 futures.append(executor.submit(client_handler.run))
-                if len(futures) >= args.client_limit:
-                    wait(futures, return_when=FIRST_COMPLETED)
+                if len(futures) >= args.client_limit: wait(futures, return_when=FIRST_COMPLETED)
                 for future in futures:
                     if not future.done(): continue
                     i = futures.index(future)
+                    client_handlers[i].close_all_socks()
                     client_handlers.pop(i)
+                    futures[i].cancel()
                     futures.pop(i)
         except (KeyboardInterrupt, EOFError): print()
         finally:
