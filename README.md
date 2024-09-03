@@ -65,4 +65,4 @@ options:
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the GPL-2.0 License.
