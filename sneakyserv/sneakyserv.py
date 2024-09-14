@@ -1,5 +1,5 @@
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait, FIRST_COMPLETED
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from collections import namedtuple
 from datetime import datetime
 import argparse
@@ -80,7 +80,7 @@ class RecvMode(HandleClients):
                 eol_index = chunk.find('\n')
                 if eol_index != -1:
                     if passw + chunk[0:eol_index + 1] == self.args.passw:
-                        local_client_sock = socket.create_connection((self.args.rhost, self.args.rport), timeout=self.args.rhost_timeout)
+                        local_client_sock = socket.create_connection((self.args.rhost, self.args.rport), timeout=self.args.lhost_timeout)
                         client_info = self.ClientInfo(sock=local_client_sock, info=local_client_sock.getsockname(), cli_type='local')
                         self.socks_info.append(client_info)
                         self.print_status(client_info, 'connected')
@@ -90,8 +90,9 @@ class RecvMode(HandleClients):
                 passw += chunk
         executor = ThreadPoolExecutor(max_workers=1)
         auth_worker = executor.submit(auth)
-        try: local_client_sock = auth_worker.result(timeout=self.args.auth_timeout)
-        except TimeoutError: pass
+        try:
+            if (local_client_sock := auth_worker.result(timeout=self.args.auth_timeout)) and local_client_sock is None: return
+        except TimeoutError: return
         else:
             remote_client_sock.settimeout(self.args.rhost_timeout)
             self.handle_client(local_client_sock, remote_client_sock)
@@ -103,6 +104,7 @@ class SendMode(HandleClients):
 
     def setup_conns(self):
         local_client_sock = self.sock
+        local_client_sock.settimeout(self.args.lhost_timeout)
         remote_client_sock = socket.create_connection((self.args.rhost, self.args.rport), timeout=self.args.rhost_timeout)
         client_info = self.ClientInfo(sock=remote_client_sock, info=remote_client_sock.getsockname(), cli_type='remote')
         self.socks_info.append(client_info)
@@ -157,7 +159,6 @@ def main():
         serv_sock = None
         try:
             serv_sock = socket.create_server((args.lhost, args.lport), reuse_port=True)
-            serv_sock.settimeout(args.lhost_timeout)
             serv_sock.listen()
             while True:
                 client_handler = client_handler_class(args)
